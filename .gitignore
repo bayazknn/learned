@@ -34,3 +34,7 @@ archive/services/__pycache__/
 # Other
 *.sqlite3
 *.db
+*.md
+.clinerules/
+.terminal_commands
+.gitignore
