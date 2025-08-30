@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+**/node_modules/
+yt_learn/node_modules/
+**/public/
+yt_learn/public/
+.pnp
+.pnp.js
+**/.gitignore
+**/__pycache__/
+**/*.pyc
+**/venv/
+
+# Build outputs
+/build/
+/dist/
+/.next/
+/out/
+yt_learn/build/
+yt_learn/dist/
+yt_learn/.next/
+yt_learn/out/
+**/build/
+**/dist/
+**/.next/
+**/out/
+
+# Testing
+/coverage/
+**/.pytest_cache/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.terminal_commands
+
+# Large data files
+*.csv
+*.xlsx
+qdrant_storage/

@@ -1,0 +1,2 @@
+celery -A backend.tasks.background.app worker --loglevel=info --concurrency=3
+celery -A backend.tasks.background.app flower

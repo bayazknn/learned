@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.env/
+
+# Node.js
+node_modules/
+dist/
+*.log
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Alembic
+backend/alembic/versions/__pycache__/
+
+# Qdrant
+qdrant_storage/
+
+# Archive
+archive/services/__pycache__/
+
+# Other
+*.sqlite3
+*.db
