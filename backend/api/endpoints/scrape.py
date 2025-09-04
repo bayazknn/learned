@@ -5,84 +5,47 @@ from uuid import UUID
 
 from backend.database import get_db
 from backend import crud, schemas
-from backend.tasks.background import scrape_url_task
 
 router = APIRouter(prefix="/scrape", tags=["scraping"])
 
-@router.post("/")
-async def initiate_scrape(
-    url: str,
-    background_tasks: BackgroundTasks,
-    project_id: Optional[UUID] = None,
-    db: Session = Depends(get_db)
-):
-    """
-    Initiate web scraping for a URL. Optionally associate with a project for RAG storage.
-    """
-    # Validate URL format
-    from urllib.parse import urlparse
-    parsed_url = urlparse(url)
-    if not parsed_url.scheme or not parsed_url.netloc:
-        raise HTTPException(status_code=400, detail="Invalid URL format")
-    
-    # Check if URL already exists
-    existing_content = crud.get_scraped_content(db, url)
-    if existing_content:
-        raise HTTPException(status_code=400, detail="URL already scraped")
-    
-    # Verify project exists if provided
-    if project_id:
-        db_project = crud.get_project(db, project_id)
-        if db_project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Start background task for scraping
-    background_tasks.add_task(scrape_url_task, url, str(project_id) if project_id else None)
-    
-    return {
-        "message": "Scraping initiated",
-        "url": url,
-        "project_id": project_id
-    }
 
-@router.get("/")
-async def get_scraped_content(
-    skip: int = 0,
-    limit: int = 100,
+@router.post("/source")
+async def scrape_sources_for_video(
+    request_data: dict,
     db: Session = Depends(get_db)
 ):
     """
-    Get all scraped content with pagination.
+    Scrape additional sources for a video using background Celery tasks.
+    If source_url and source_type are provided, it scrapes content from that specific source.
+    If only video_id and project_id are provided, it triggers bulk scraping.
     """
-    scraped_content = crud.get_all_scraped_content(db, skip=skip, limit=limit)
-    return scraped_content
+    from backend.tasks.background import scrape_sources_task
 
-@router.get("/{url}")
-async def get_scraped_content_by_url(
-    url: str,
-    db: Session = Depends(get_db)
-):
-    """
-    Get scraped content for a specific URL.
-    """
-    scraped_content = crud.get_scraped_content(db, url)
-    if scraped_content is None:
-        raise HTTPException(status_code=404, detail="URL not scraped yet")
-    return scraped_content
+    # Extract parameters from request body
+    knowledge_item_id_str = request_data.get("id")
 
-@router.delete("/{url}")
-async def delete_scraped_content(
-    url: str,
-    db: Session = Depends(get_db)
-):
-    """
-    Delete scraped content for a specific URL.
-    """
-    scraped_content = crud.get_scraped_content(db, url)
-    if scraped_content is None:
-        raise HTTPException(status_code=404, detail="URL not scraped yet")
-    
-    db.delete(scraped_content)
-    db.commit()
-    
-    return {"message": "Scraped content deleted successfully"}
+
+    # Convert kno string to UUID if provided
+    if knowledge_item_id_str:
+        try:
+            knowledge_item_id = UUID(knowledge_item_id_str)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid knowledge_item_id format")
+
+    knowledge_item = crud.get_knowledge_item(db, knowledge_item_id)
+        # Trigger scraping task asynchronously
+    if knowledge_item:
+        scrape_sources_task.apply_async(args=[str(knowledge_item.id)])
+
+        return {
+            "message": f"Scraping initiated for source: {str(knowledge_item.id)}",
+            "video_id": knowledge_item.video_id,
+            "knowledge_item_id": str(knowledge_item.id),
+            "source_type": knowledge_item.source_type,
+            "source_url": knowledge_item.source_url,
+            "status": "processing"
+        }
+    else:
+        return {
+            "message": f"Source can not be found"
+        }

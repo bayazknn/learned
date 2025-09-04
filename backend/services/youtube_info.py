@@ -21,11 +21,14 @@ def get_video_info(video_url: str) -> Optional[dict]:
             - upload_date: Upload date string
             - view_count: Number of views
             - thumbnail: Thumbnail URL
+            - channel: Channel name (if available)
+            - channel_id: Channel ID (if available)
     """
     ydl_opts = {
         'skip_download': True,
         'quiet': True,
         'no_warnings': True,
+        'extract_flat': True,
     }
     
     try:
@@ -40,7 +43,9 @@ def get_video_info(video_url: str) -> Optional[dict]:
                 'duration': info.get('duration'),
                 'upload_date': info.get('upload_date'),
                 'view_count': info.get('view_count'),
-                'thumbnail': info.get('thumbnail')
+                'thumbnail': info.get('thumbnail'),
+                "channel": info.get('channel'),
+                "channel_id": info.get('channel_id'),
             }
             
     except Exception as e:

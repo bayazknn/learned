@@ -2,7 +2,8 @@
 
 import React, { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { toast } from "sonner"
+
 import {
   PanelLeftClose,
   PanelLeftOpen,
@@ -30,6 +31,10 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   const handleProjectSelect = (projectId: string | null) => {
     setSelectedProject(projectId)
+  }
+
+  const handleRefreshRequest = () => {
+    // This function is used to trigger refreshes in child components
   }
 
   return (
@@ -72,6 +77,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             collapsed={leftSidebarCollapsed}
             onProjectSelect={handleProjectSelect}
             selectedProject={selectedProject}
+            onRefreshRequest={handleRefreshRequest}
           />
         </aside>
 
@@ -81,57 +87,74 @@ export function AppLayout({ children }: AppLayoutProps) {
             <div className="flex-1 overflow-auto">
               {React.Children.map(children, () => {
                 // Simple approach: just render VideoDisplay with the projectId
-                return <VideoDisplay projectId={selectedProject} />
+                return <VideoDisplay 
+                  projectId={selectedProject} 
+                  onRefreshRequest={handleRefreshRequest}
+                />
               })}
             </div>
           )}
 
-          {/* Right Sidebar with Tab Navigation */}
+          {/* Right Sidebar */}
           <aside
             className={`bg-sidebar border-l border-sidebar-border flex flex-col transition-all duration-300 ${
-              rightSidebarMaximized ? "flex-1" : "w-80"
+              rightSidebarMaximized ? "flex-1" : "w-150"
             }`}
           >
             <div className="p-3 border-b border-sidebar-border">
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-sm font-medium text-sidebar-foreground">AI Assistant</h2>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setRightSidebarMaximized(!rightSidebarMaximized)}
-                  className="h-6 w-6 p-0"
-                >
-                  {rightSidebarMaximized ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-                </Button>
-              </div>
+ 
 
-              {/* Tab Navigation */}
-              <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="w-full">
-                <TabsList className="grid w-full grid-cols-2 h-8">
-                  <TabsTrigger value="chat" className="text-xs flex items-center gap-1">
+              <div className="w-full">
+                <div className="flex w-full h-8 bg-muted rounded-md p-1 gap-1">
+                  <button
+                    onClick={() => setRightSidebarTab("chat")}
+                    className={`flex-1 text-xs flex items-center justify-center gap-1 px-2 py-1 rounded-sm transition-colors ${
+                      rightSidebarTab === "chat"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
                     <MessageSquare className="h-3 w-3" />
                     Chat
-                  </TabsTrigger>
-                  <TabsTrigger value="memory" className="text-xs flex items-center gap-1">
+                  </button>
+                  <button
+                    onClick={() => setRightSidebarTab("memory")}
+                    className={`flex-1 text-xs flex items-center justify-center gap-1 px-2 py-1 rounded-sm transition-colors ${
+                      rightSidebarTab === "memory"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
                     <Brain className="h-3 w-3" />
                     Memory
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRightSidebarMaximized(!rightSidebarMaximized)}
+                    className="h-6 w-6 p-0 ml-1"
+                  >
+                    {rightSidebarMaximized ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                  </Button>
+                </div>
+              </div>
             </div>
 
             <div className="flex-1 flex flex-col overflow-hidden">
-              <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="flex-1 flex flex-col">
-                <TabsContent value="chat" className="flex-1 p-3 mt-0">
-                  <AIChat projectId={selectedProject} selectedVideoId={null} />
-                </TabsContent>
+              {rightSidebarTab === "chat" && (
+                <AIChat
+                  projectId={selectedProject}
+                  selectedVideoId={null}
+                />
+              )}
 
-                <TabsContent value="memory" className="flex-1 p-3 mt-0 overflow-hidden">
+              {rightSidebarTab === "memory" && (
+                <div className="flex-1 p-3 mt-0 overflow-hidden">
                   <div className="h-full">
                     <MemoryManagement />
                   </div>
-                </TabsContent>
-              </Tabs>
+                </div>
+              )}
             </div>
           </aside>
         </main>

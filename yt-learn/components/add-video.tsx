@@ -20,15 +20,17 @@ export function AddVideo({ projectId, onVideoAdded }: AddVideoProps) {
   const [isAdding, setIsAdding] = useState(false)
 
   const pollForProcessingCompletion = async (videoId: string) => {
-    const maxAttempts = 30; // 30 attempts with 2 second intervals = 60 seconds total
-    const pollInterval = 2000; // 2 seconds
-    
+    const maxAttempts = 15; // Reduced from 20 to 15 attempts for faster completion
+    let consecutiveErrors = 0;
+    const maxConsecutiveErrors = 3;
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const statusResponse = await fetch(`${VIDEO_API_URL}${videoId}/processing-status`);
         if (statusResponse.ok) {
           const videoData = await statusResponse.json();
-          
+          consecutiveErrors = 0; // Reset error counter on success
+
           if (videoData.processing_status === 'completed') {
             toast.success("Video processing completed successfully");
             return true;
@@ -37,15 +39,27 @@ export function AddVideo({ projectId, onVideoAdded }: AddVideoProps) {
             return false;
           }
           // If still processing, continue polling
+        } else {
+          consecutiveErrors++;
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            console.warn(`Too many consecutive errors (${consecutiveErrors}), stopping polling`);
+            break;
+          }
         }
       } catch (error) {
+        consecutiveErrors++;
         console.error("Error checking processing status:", error);
+        if (consecutiveErrors >= maxConsecutiveErrors) {
+          console.warn(`Too many consecutive errors (${consecutiveErrors}), stopping polling`);
+          break;
+        }
       }
-      
-      // Wait before next poll
+
+      // Dynamic polling interval with exponential backoff
+      const pollInterval = Math.min(2000 + (attempt * 1000), 10000); // Start at 2s, max at 10s
       await new Promise(resolve => setTimeout(resolve, pollInterval));
     }
-    
+
     toast.warning("Video processing is taking longer than expected. Some metadata may still be processing.");
     return false;
   }

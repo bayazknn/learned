@@ -19,8 +19,14 @@ class Video(Base):
     upload_date = Column(String, nullable=True)  # YYYYMMDD format
     views = Column(Integer, nullable=True)  # View count
     thumbnail_url = Column(String, nullable=True)  # Thumbnail URL
+    channel = Column(String, nullable=True)  # YouTube channel name
+    channel_id = Column(String, nullable=True)  # YouTube channel ID
     processing_status = Column(String, default="pending")  # pending, processing, completed, failed
     processed_at = Column(String, nullable=True)  # ISO format timestamp when processing completed
+    summary = Column(Text, nullable=True)  # AI-generated summary of the transcript
+    summary_processing_status = Column(String, default="pending")  # pending, processing, completed, failed for summary generation
+    summary_processed_at = Column(String, nullable=True)  # ISO format timestamp when summary processing completed
+    created_at = Column(String, default=lambda: datetime.now().isoformat())
     
     project = relationship("Project", back_populates="videos")
     knowledge_items = relationship("KnowledgeItem", back_populates="video")
@@ -31,10 +37,12 @@ class Project(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     name = Column(String, index=True)
     description = Column(Text)
+    prompt_context = Column(Text, nullable=True)  # Custom prompt context for LLMs
     created_at = Column(String, default=lambda: datetime.now().isoformat())  # ISO format timestamp
 
     knowledge_items = relationship("KnowledgeItem", back_populates="project")
     videos = relationship("Video", back_populates="project")
+    chat_threads = relationship("ChatThread", back_populates="project")
 
 class KnowledgeItem(Base):
     __tablename__ = "knowledge_items"
@@ -49,13 +57,38 @@ class KnowledgeItem(Base):
     embedding_model = Column(String, nullable=True)  # e.g., 'ollama', 'gemini'
     task_id = Column(String, nullable=True)  # Celery task ID for tracking
     processed_at = Column(String, nullable=True)  # ISO format timestamp when processing completed
+    created_at = Column(String, default=lambda: datetime.now().isoformat())
 
     video = relationship("Video", back_populates="knowledge_items")
     project = relationship("Project", back_populates="knowledge_items")
 
-class ScrapedContent(Base):
-    __tablename__ = "scraped_content"
+class ChatThread(Base):
+    __tablename__ = "chat_threads"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    url = Column(String, unique=True, index=True)
+    title = Column(String, nullable=True)  # Auto-generated or user-set title
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)
+    user_id = Column(String, nullable=True)  # For future multi-user support
+    created_at = Column(String, default=lambda: datetime.now().isoformat())
+    updated_at = Column(String, default=lambda: datetime.now().isoformat())
+
+    project = relationship("Project", back_populates="chat_threads")
+    messages = relationship("ChatMessage", back_populates="thread", order_by="ChatMessage.created_at")
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    thread_id = Column(UUID(as_uuid=True), ForeignKey("chat_threads.id"))
+    role = Column(String)  # 'user', 'assistant', 'system'
     content = Column(Text)
+    message_type = Column(String, default="text")  # 'text', 'file', 'tool_call', 'tool_result'
+    file_url = Column(String, nullable=True)  # For file uploads
+    file_name = Column(String, nullable=True)  # For file uploads
+    file_type = Column(String, nullable=True)  # MIME type for files
+    tool_calls = Column(Text, nullable=True)  # JSON string for tool calls
+    tool_results = Column(Text, nullable=True)  # JSON string for tool results
+    sources = Column(Text, nullable=True)  # JSON string for RAG sources
+    created_at = Column(String, default=lambda: datetime.now().isoformat())
+
+    thread = relationship("ChatThread", back_populates="messages")

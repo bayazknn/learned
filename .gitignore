@@ -38,3 +38,5 @@ archive/services/__pycache__/
 .clinerules/
 .terminal_commands
 .gitignore
+archive/
+*.ipynb

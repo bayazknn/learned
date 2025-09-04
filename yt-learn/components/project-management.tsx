@@ -10,16 +10,14 @@ import { toast } from "sonner"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Plus, Search, MoreVertical, Edit, Trash2, Folder, Video, Loader2 } from "lucide-react"
-import { on } from "events"
+import { formatDate } from "@/lib/utils"
+
 
 
 interface ProjectCreate {
   name: string
   description: string
-}
-
-interface ProjectUpdate extends ProjectCreate {
-  id: string
+  promptContext: string
 }
 
 interface Project extends ProjectCreate {
@@ -33,38 +31,56 @@ interface ProjectManagementProps {
   collapsed: boolean
   onProjectSelect: (projectId: string | null) => void
   selectedProject: string | null
+  onRefreshRequest?: () => void
 }
 
 const PROJECT_API_URL = 'http://localhost:8000/api/projects/'
 
-export function ProjectManagement({ collapsed, onProjectSelect, selectedProject }: ProjectManagementProps) {
+export function ProjectManagement({ collapsed, onProjectSelect, selectedProject, onRefreshRequest }: ProjectManagementProps) {
   const [projects, setProjects] = useState<Project[]>([])
   const [searchQuery, setSearchQuery] = useState("")
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
-  const [newProject, setNewProject] = useState<ProjectCreate>({ name: "", description: "" })  
+  const [newProject, setNewProject] = useState<ProjectCreate>({ name: "", description: "", promptContext: "" })  
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    const fetchProjects = async () => {
-      try {
-        setLoading(true)
-        const response = await fetch(PROJECT_API_URL)
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`)
-        }
-        const data = await response.json()
-        setProjects(data)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch projects')
-        console.error('Error fetching projects:', err)
-      } finally {
-        setLoading(false)
+  const fetchProjects = async () => {
+    try {
+      setLoading(true)
+      const response = await fetch(PROJECT_API_URL)
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
       }
-    }
+      const data = await response.json() as Project[]
 
+      setProjects(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch projects')
+      console.error('Error fetching projects:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchProjectById = async (projectId: string) => {
+    try {
+      const response = await fetch(`${PROJECT_API_URL}${projectId}`)
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      const data = await response.json() as Project
+      
+      return data
+    } catch (err) {
+      console.error('Error fetching project by ID:', err)
+      return null
+    }
+  }
+  
+  
+  useEffect(() => {
     fetchProjects()
   }, [])
 
@@ -74,12 +90,35 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
       project.description.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
+  const handleSelectProject = async (projectId: string) => {
+    const project = await fetchProjectById(projectId)
+    if (project) {
+      console.log('Selected Project:', project)
+      
+      // Update the projects state with the latest project data
+      setProjects((prevProjects) => {
+        return prevProjects.map((p) =>
+          p.id === projectId ? { ...project } : p
+        )
+      })
+    }
+
+    onProjectSelect(projectId)
+    
+    // Trigger refresh when project is selected
+    if (onRefreshRequest) {
+      onRefreshRequest()
+    }
+  }
+
+
 
   const handleCreateProject = async () => {
     if (newProject.name.trim()) {
       const project: ProjectCreate = {
         name: newProject.name,
-        description: newProject.description
+        description: newProject.description,
+        promptContext: newProject.promptContext,
       }
 
       // consume backend API to create project
@@ -97,12 +136,14 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
       }
 
       const createdProject = await response.json() as Project
+      console.log('Created Project:', createdProject)
+      
 
       toast.success('Project created successfully')
 
       
       setProjects([createdProject, ...projects])
-      setNewProject({ name: "", description: "" })
+      setNewProject({ name: "", description: "", promptContext: "" })
       setIsCreateDialogOpen(false)
       onProjectSelect(createdProject.id)
     }
@@ -141,27 +182,33 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
     }
   }
 
-  const handleDeleteProject = (projectId: string) => {
+  const handleDeleteProject = async (projectId: string) => {
+    try {
+      // Call backend API to delete project
+      const response = await fetch(`${PROJECT_API_URL}${projectId}`, {
+        method: 'DELETE',
+      })
 
-    // Call backend API to delete project
-    fetch(`${PROJECT_API_URL}${projectId}/`, {
-      method: 'DELETE',
-    }).then((response) => {
       if (!response.ok) {
-        toast.error('Failed to delete project')
+        const errorData = await response.json().catch(() => ({}))
+        toast.error(`Failed to delete project: ${errorData.detail || 'Unknown error'}`)
         return
       }
+
+      // Remove project from local state
       setProjects(projects.filter((p) => p.id !== projectId))
+
+      // Handle project selection logic
       if (selectedProject === projectId) {
-        onProjectSelect(projects.length > 1 ? projects.find((p) => p.id !== projectId)?.id || null : null)
+        const remainingProjects = projects.filter((p) => p.id !== projectId)
+        onProjectSelect(remainingProjects.length > 0 ? remainingProjects[0].id : null)
       }
-      toast.success('Project deleted successfully')
-    }).catch((error) => {
+
+      toast.success('Project and all associated data deleted successfully')
+    } catch (error) {
       console.error('Error deleting project:', error)
       toast.error('Failed to delete project')
-    })
-
-    
+    }
   }
 
   if (loading) {
@@ -235,6 +282,16 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
                 rows={3}
               />
             </div>
+            <div>
+              <Label htmlFor="project-prompt-context">Prompt Context</Label>
+              <Textarea
+                id="project-prompt-context"
+                value={newProject.promptContext}
+                onChange={(e) => setNewProject({ ...newProject, promptContext: e.target.value })}
+                placeholder="Enter project prompt context..."
+                rows={20}
+              />
+            </div>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                 Cancel
@@ -272,7 +329,7 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
                 className={`p-3 cursor-pointer transition-colors hover:bg-accent/50 ${
                   selectedProject === project.id ? "bg-accent" : ""
                 }`}
-                onClick={() => onProjectSelect(project.id)}
+                onClick={async () => await handleSelectProject(project.id)}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
@@ -286,7 +343,7 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
                         <Video className="h-3 w-3" />
                         <span>{project.videoCount}</span>
                       </div>
-                      <span>{project.createdAt}</span>
+                      <span>{formatDate(project.createdAt)}</span>
                     </div>
                   </div>
 
@@ -303,10 +360,16 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
-                        onClick={(e) => {
+                        onClick={async (e) => {
                           e.stopPropagation()
-                          setEditingProject(project)
-                          setIsEditDialogOpen(true)
+                          const latestProject = await fetchProjectById(project.id)
+                          if (latestProject) {
+                            console.log("latest project", latestProject)
+                            setEditingProject(latestProject)
+                            setIsEditDialogOpen(true)
+                          } else {
+                            toast.error('Failed to load project details')
+                          }
                         }}
                       >
                         <Edit className="h-4 w-4 mr-2" />
@@ -358,6 +421,16 @@ export function ProjectManagement({ collapsed, onProjectSelect, selectedProject 
                   rows={3}
                 />
               </div>
+              <div>
+              <Label htmlFor="project-prompt-context">Prompt Context</Label>
+              <Textarea
+                id="project-prompt-context"
+                value={editingProject.promptContext}
+                onChange={(e) => setEditingProject({ ...editingProject, promptContext: e.target.value })}
+                placeholder="Enter project prompt context..."
+                rows={20}
+              />
+            </div>
               <div className="flex gap-2 justify-end">
                 <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
                   Cancel

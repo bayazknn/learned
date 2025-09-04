@@ -1,0 +1,9 @@
+source backend/venv/bin/activate && celery -A backend.tasks.background.app worker --loglevel=info --concurrency=1
+
+source backend/venv/bin/activate && uvicorn backend.main:app --reload           
+
+cd yt-learn && npm run dev
+
+
+
+celery -A backend.tasks.background.app flower

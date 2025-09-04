@@ -10,6 +10,7 @@ yt_learn/public/
 **/__pycache__/
 **/*.pyc
 **/venv/
+archive/
 
 # Build outputs
 /build/
@@ -41,3 +42,4 @@ yt_learn/out/
 *.csv
 *.xlsx
 qdrant_storage/
+*.ipynb

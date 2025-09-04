@@ -21,7 +21,7 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 sys.path.append(os.path.dirname(os.getcwd()))
 from backend.database import Base
-from backend.models import Video, Project, KnowledgeItem, ScrapedContent  # noqa
+from backend.models import Video, Project, KnowledgeItem  # noqa
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

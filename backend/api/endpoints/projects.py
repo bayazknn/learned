@@ -22,6 +22,7 @@ async def create_project(
         id=db_project.id,
         name=db_project.name,
         description=db_project.description,
+        prompt_context=db_project.prompt_context,
         created_at=db_project.created_at,
         video_count=0  # New project has 0 videos
     )
@@ -41,6 +42,7 @@ async def update_project(project: schemas.ProjectUpdate, db: Session = Depends(g
         id=updated_project.id,
         name=updated_project.name,
         description=updated_project.description,
+        prompt_context=updated_project.prompt_context,
         created_at=updated_project.created_at,
         video_count=len(updated_project.videos)  # Return current video count
     )
@@ -64,6 +66,7 @@ async def get_projects(
             id=project.id,
             name=project.name,
             description=project.description,
+            prompt_context=project.prompt_context,
             created_at=project.created_at,
             video_count=video_count
         )
@@ -90,13 +93,14 @@ async def get_project(
     video_responses = [
         schemas.VideoResponse(
             id=video.id,
+            youtube_id=video.youtube_id,
             project_id=video.project_id,
             title=video.title,
             description=video.description,
             url=video.url,
             transcript=video.transcript,
             duration=video.duration,
-            uploaded_date=video.uploaded_date,
+            upload_date=video.upload_date,
             views=video.views,
             thumbnail_url=video.thumbnail_url
         )
@@ -115,7 +119,7 @@ async def get_project(
             content=item.content,
             source_url=item.source_url,
             source_type=item.source_type,
-            video_id=item.video_id
+            video_id=str(item.video_id)
         )
         for item in knowledge_items
     ]
@@ -124,6 +128,7 @@ async def get_project(
         id=db_project.id,
         name=db_project.name,
         description=db_project.description,
+        prompt_context=db_project.prompt_context,
         created_at=db_project.created_at,
         video_count=len(db_project.videos),
         knowledge_items=knowledge_responses,
@@ -136,22 +141,15 @@ async def delete_project(
     db: Session = Depends(get_db)
 ):
     """
-    Delete a project by ID.
+    Delete a project by ID along with all associated videos and knowledge items.
     """
-    db_project = crud.get_project(db, project_id)
-    if db_project is None:
+    # Use the new delete_project function that handles cascading deletes
+    success = crud.delete_project(db, project_id)
+    if not success:
         raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Delete associated knowledge items first
-    knowledge_items = crud.get_knowledge_items_by_project(db, project_id)
-    for item in knowledge_items:
-        db.delete(item)
-    
-    db.delete(db_project)
-    db.commit()
-    
+
     # Delete from RAG (placeholder - would need RAG integration)
     # from backend.services.rag import delete_project_knowledge
     # delete_project_knowledge(str(project_id))
-    
-    return {"message": "Project deleted successfully"}
+
+    return {"message": "Project and all associated data deleted successfully"}

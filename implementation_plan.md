@@ -1,76 +1,83 @@
-# Implementation Plan
+# Implementation Plan: Fix AI SDK v5 Compatibility Issues
 
-Replace current yt-dlp based YouTube transcript extraction with youtube_transcript_api while maintaining video information extraction using yt-dlp. Archive existing YouTube service files and create new simplified implementations that maintain backward compatibility with the existing codebase.
+## Overview
+Fix compilation errors in the AI chat components caused by upgrading from AI SDK v4 to v5. The main issues are incompatible useChat hook API, transport configuration changes, and message format updates. The backend uses a custom streaming format that needs to be properly integrated with the new AI SDK UI components.
 
-The current YouTube service implementation uses yt-dlp for both transcript extraction and video information, but the transcript extraction is not working reliably. The solution is to replace transcript extraction with youtube_transcript_api while keeping yt-dlp for video metadata extraction. The new implementation should be simpler than the current complex error handling and retry logic.
-
-## Types  
-No type system changes required as function signatures will remain the same.
-
-The implementation will maintain the existing function signatures:
-- `extract_transcript(video_url: str) -> Optional[str]` - Returns transcript text or None
-- `get_video_info(video_url: str) -> Optional[dict]` - Returns video metadata dict or None
+## Types
+Update TypeScript interfaces to match AI SDK v5 API changes:
+- Replace `UseChatHelpers` with new hook return types
+- Update message format to use `parts` property
+- Add proper typing for transport configuration
+- Update status enum values ('submitted', 'streaming', 'ready', 'error')
 
 ## Files
-Single sentence describing file modifications.
+### yt-learn/components/ai-chat.tsx (MODIFIED)
+- Replace old useChat API with new v5 syntax
+- Remove `input`, `handleInputChange`, `handleSubmit` properties
+- Add manual input state management with `useState`
+- Update transport configuration to use `DefaultChatTransport`
+- Replace `handleSubmit` calls with `sendMessage({ text: input })`
+- Update status mapping for loading states
+- Remove deprecated `experimental_attachments` usage
+- Update error handling for new API
 
-Detailed breakdown:
-- **New files to be created**: 
-  - `backend/services/youtube_transcript.py` - New transcript service using youtube_transcript_api
-  - `backend/services/youtube_info.py` - New video info service using yt-dlp (simplified)
+### yt-learn/components/chat/chat-input.tsx (MODIFIED)
+- Update props interface to match new input handling
+- Remove `handleInputChange` and `handleSubmit` props
+- Add `sendMessage` prop for new API
+- Update form submission logic
 
-- **Existing files to be modified**:
-  - `backend/tasks/background.py` - Update imports to use new services
-  - `backend/api/endpoints/videos.py` - Update imports to use new services
+### yt-learn/components/chat/chat-message.tsx (MODIFIED)
+- Update message content extraction to use `parts` property
+- Add proper handling for different part types ('text', 'reasoning', etc.)
+- Update source handling for new message format
+- Maintain backward compatibility with existing message structure
 
-- **Files to be archived**:
-  - `backend/services/youtube.py` -> `archive/services/youtube.py`
-  - `backend/services/youtube_api.py` -> `archive/services/youtube_api.py`
-
-- **Configuration file updates**: None required
+### yt-learn/components/chat/index.ts (NO CHANGE)
+- Export statements remain the same
 
 ## Functions
-Single sentence describing function modifications.
+### New Functions
+- `handleSendMessage`: Replace handleSubmit with sendMessage logic
+- `handleInputSubmit`: Handle form submission with manual input state
 
-Detailed breakdown:
-- **New functions**:
-  - `extract_transcript(video_url: str) -> Optional[str]` in `youtube_transcript.py` - Uses youtube_transcript_api to extract English transcripts
-  - `get_video_info(video_url: str) -> Optional[dict]` in `youtube_info.py` - Uses yt-dlp to extract basic video metadata
+### Modified Functions
+- `handleCustomSubmit`: Update to use sendMessage instead of handleSubmit
+- `handleKeyDown`: Update to work with new input handling
+- `getMessageContent`: Update to extract content from parts array
 
-- **Modified functions**: None (maintaining same signatures)
-
-- **Removed functions**: All functions from archived files will be replaced
+### Removed Functions
+- None - maintaining backward compatibility
 
 ## Classes
-Single sentence describing class modifications.
-
-Detailed breakdown:
-- **New classes**: None (functional approach preferred for simplicity)
-
-- **Modified classes**: None
-
-- **Removed classes**: YouTubeAPIClient class from youtube_api.py will be archived
+No class modifications required - all components are functional.
 
 ## Dependencies
-Single sentence describing dependency modifications.
+### Current Versions (package.json)
+- "ai": "^5.0.30"
+- "@ai-sdk/react": "^2.0.30"
 
-No new dependencies required as youtube_transcript_api is already installed. The existing yt-dlp dependency will continue to be used for video information extraction.
+### Compatibility Notes
+- Versions are correct for AI SDK v5
+- No dependency updates needed
+- Backend API format is custom but compatible
 
 ## Testing
-Single sentence describing testing approach.
+### Test Cases Needed
+- Verify chat message sending works with new API
+- Test file upload functionality with updated transport
+- Confirm streaming responses display correctly
+- Validate error handling for network issues
+- Test thread management with new message format
 
-Basic smoke testing will be performed to ensure the new services work with the existing codebase. No formal test files will be created initially, but the implementation should be verified through manual testing of the video processing workflow.
+### Existing Test Files
+- No specific chat component tests found
+- Backend tests exist but may need updates for new API
 
 ## Implementation Order
-Single sentence describing the implementation sequence.
-
-Numbered steps showing the logical order of changes to minimize conflicts and ensure successful integration:
-
-1. Create new youtube_transcript.py service with youtube_transcript_api implementation
-2. Create new youtube_info.py service with simplified yt-dlp implementation  
-3. Update background.py to import from new services instead of old ones
-4. Update videos.py API endpoint to import from new services instead of old ones
-5. Move old youtube.py and youtube_api.py to archive directory
-6. Test the complete workflow to ensure backward compatibility
-
-The implementation will proceed in this order to ensure that at each step, the system remains functional and any issues can be caught early.
+1. Update ai-chat.tsx with new useChat API
+2. Modify chat-input.tsx to work with new input handling
+3. Update chat-message.tsx for parts-based message format
+4. Test file upload and streaming functionality
+5. Verify error handling and status updates
+6. Test integration with existing backend API

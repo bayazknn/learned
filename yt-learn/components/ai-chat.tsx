@@ -1,281 +1,342 @@
 "use client"
 
 import type React from "react"
-
-import { useState, useRef, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
-import { MessageSquare, Send, Bot, User, Loader2, Sparkles, Brain } from "lucide-react"
-
-interface ChatMessage {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  timestamp: Date
-  sources?: string[]
-  memoryStored?: boolean
-}
+import { useState, useRef, useEffect, useCallback } from "react"
+import { toast } from "sonner"
+import {
+  ChatHeader,
+  MessageList,
+  ChatInput,
+  FileUploadPreview
+} from "./chat"
 
 interface AIChatProps {
   projectId: string | null
   selectedVideoId: string | null
 }
 
+interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: string
+  parts: Array<{ type: 'text'; text: string }>
+  sources?: any[]
+  isError?: boolean
+}
+
+interface ChatSettings {
+  model: "gemini" | "ollama"
+  streaming: boolean
+  maxTokens: number
+  temperature: number
+}
+
 export function AIChat({ projectId, selectedVideoId }: AIChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        "Hello! I'm your AI assistant. I can help you analyze your videos, answer questions about their content, and store important insights in memory. What would you like to know?",
-      timestamp: new Date(),
-    },
-  ])
-  const [inputValue, setInputValue] = useState("")
+  const [threadId, setThreadId] = useState<string | null>(null)
+  const [settings, setSettings] = useState<ChatSettings>({
+    model: "gemini",
+    streaming: true,
+    maxTokens: 4096,
+    temperature: 0.7
+  })
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [uploadedFiles, setUploadedFiles] = useState<File[]>([])
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isLoading, setIsLoading] = useState(false)
-  const scrollAreaRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Manual input state
+  const [input, setInput] = useState('')
 
   // Auto-scroll to bottom when new messages are added
   useEffect(() => {
-    if (scrollAreaRef.current) {
-      scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight
+    if (messagesEndRef.current) {
+      // Use requestAnimationFrame for better timing with DOM updates
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'end'
+          })
+        }, 50) // Small delay to ensure content is rendered
+      })
     }
   }, [messages])
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isLoading) return
+  // Handle file upload
+  const handleFileUpload = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || [])
+    setUploadedFiles(prev => [...prev, ...files])
+    toast.success(`Uploaded ${files.length} file(s)`)
+  }, [])
 
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: "user",
-      content: inputValue,
-      timestamp: new Date(),
+  // Remove uploaded file
+  const removeFile = useCallback((index: number) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+  }, [])
+
+  // Copy message to clipboard
+  const copyToClipboard = useCallback(async (content: string, messageId: string) => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopiedMessageId(messageId)
+      toast.success("Copied to clipboard")
+      setTimeout(() => setCopiedMessageId(null), 2000)
+    } catch (err) {
+      toast.error("Failed to copy to clipboard")
+    }
+  }, [])
+
+  // Create new chat thread
+  const createNewThread = useCallback(() => {
+    setThreadId(null)
+    setMessages([])
+    toast.success("Started new conversation")
+  }, [])
+
+  // Upload files to backend
+  const uploadFiles = useCallback(async (files: File[]): Promise<string[]> => {
+    const uploadedUrls: string[] = []
+
+    for (const file of files) {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      try {
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!response.ok) {
+          throw new Error(`Failed to upload ${file.name}`)
+        }
+
+        const result = await response.json()
+        uploadedUrls.push(result.url)
+      } catch (err) {
+        console.error(`Error uploading ${file.name}:`, err)
+        throw err
+      }
     }
 
-    setMessages((prev) => [...prev, userMessage])
-    setInputValue("")
+    return uploadedUrls
+  }, [])
+
+  // Custom submit handler to handle streaming responses
+  const handleCustomSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!input?.trim() && uploadedFiles.length === 0) return
+
+    // Check if project is selected
+    if (!projectId) {
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        role: 'assistant',
+        content: 'Please select a project before sending messages.',
+        createdAt: new Date().toISOString(),
+        parts: [{ type: 'text', text: 'Please select a project before sending messages.' }],
+        isError: true
+      }
+      setMessages(prev => [...prev, errorMessage])
+      toast.error('Please select a project first')
+      return
+    }
+
     setIsLoading(true)
 
-    // Simulate AI response (in real app, this would call the backend)
-    setTimeout(() => {
-      const responses = [
-        {
-          content:
-            "Based on the video transcript, this topic covers machine learning fundamentals. The key concepts mentioned include supervised learning, data preprocessing, and model evaluation. Would you like me to store this information in memory for future reference?",
-          sources: ["Video Transcript", "ML Documentation"],
-        },
-        {
-          content:
-            "I found several relevant sources in your video collection that discuss React patterns. The render props pattern is particularly useful for component composition. This information could be valuable for your development workflow.",
-          sources: ["React Video #2", "Advanced Patterns Guide"],
-        },
-        {
-          content:
-            "The design principles mentioned in this video align with modern UI/UX best practices. Color theory and typography are fundamental concepts that every developer should understand. I can help you connect this with other design-related content in your collection.",
-          sources: ["Design Video #3", "Material Design Guidelines"],
-        },
-      ]
+    // Create assistant message placeholder
+    const assistantMessageId = `assistant-${Date.now()}`
 
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)]
-
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: randomResponse.content,
-        timestamp: new Date(),
-        sources: randomResponse.sources,
-        memoryStored: Math.random() > 0.5, // Randomly simulate memory storage
+    try {
+      // Upload files first if any
+      let fileUrls: string[] = []
+      if (uploadedFiles.length > 0) {
+        fileUrls = await uploadFiles(uploadedFiles)
       }
 
-      setMessages((prev) => [...prev, assistantMessage])
-      setIsLoading(false)
-    }, 1500)
-  }
+      // Add user message to chat
+      const userMessage: ChatMessage = {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content: input || "Please analyze the uploaded files",
+        createdAt: new Date().toISOString(),
+        parts: [{ type: 'text', text: input || "Please analyze the uploaded files" }]
+      }
+      setMessages(prev => [...prev, userMessage])
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        createdAt: new Date().toISOString(),
+        parts: [{ type: 'text', text: '' }],
+        sources: []
+      }
+      setMessages(prev => [...prev, assistantMessage])
+
+      // Make streaming API call to backend
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: input || "Please analyze the uploaded files",
+          thread_id: threadId,
+          project_id: projectId,
+          video_ids: selectedVideoId ? [selectedVideoId] : null,
+          file_url: fileUrls.length > 0 ? fileUrls[0] : null,
+          file_name: uploadedFiles.length > 0 ? uploadedFiles[0].name : null,
+          file_type: uploadedFiles.length > 0 ? uploadedFiles[0].type : null,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`)
+      }
+
+      // Handle Server-Sent Events
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      let accumulatedContent = ''
+      let sources: any[] = []
+
+      if (reader) {
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+
+            const chunk = decoder.decode(value)
+            const lines = chunk.split('\n')
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6)) // Remove 'data: ' prefix
+
+                  if (data.type === 'text') {
+                    accumulatedContent += data.content
+                    // Update the assistant message with streaming content
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? {
+                            ...msg,
+                            content: accumulatedContent,
+                            parts: [{ type: 'text', text: accumulatedContent }]
+                          }
+                        : msg
+                    ))
+                  } else if (data.type === 'sources') {
+                    sources = data.sources
+                    // Update sources
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, sources }
+                        : msg
+                    ))
+                  } else if (data.type === 'done') {
+                    // Update thread ID if provided
+                    if (data.thread_id && !threadId) {
+                      setThreadId(data.thread_id)
+                    }
+                    break
+                  } else if (data.type === 'error') {
+                    throw new Error(data.content)
+                  }
+                } catch (parseError) {
+                  console.warn('Failed to parse SSE data:', line, parseError)
+                }
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock()
+        }
+      }
+
+      // Clear input and files after successful submit
+      setInput('')
+      setUploadedFiles([])
+
+    } catch (err: any) {
+      console.error('Error in custom submit:', err)
+
+      // Remove the placeholder assistant message and add error message
+      setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId))
+
+      // Create error message as chat message
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        role: 'assistant',
+        content: `I encountered an error: ${err.message || 'Unknown error occurred'}`,
+        createdAt: new Date().toISOString(),
+        parts: [{ type: 'text', text: `I encountered an error: ${err.message || 'Unknown error occurred'}` }],
+        isError: true
+      }
+      setMessages(prev => [...prev, errorMessage])
+      toast.error('Failed to send message')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [input, uploadedFiles, threadId, projectId, selectedVideoId, uploadFiles])
+
+  // Handle input change
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setInput(e.target.value)
+  }, [])
+
+  // Handle keyboard shortcuts
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault()
-      handleSendMessage()
+      handleCustomSubmit(e as any)
     }
-  }
-
-  const storeInMemory = (messageId: string) => {
-    setMessages((prev) => prev.map((msg) => (msg.id === messageId ? { ...msg, memoryStored: true } : msg)))
-  }
+  }, [handleCustomSubmit])
 
   return (
-    <Card className="h-full flex flex-col">
-      {/* Chat Header */}
-      <div className="p-4 border-b border-border">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium">AI Assistant</span>
-          <Badge variant="secondary" className="ml-auto">
-            <Sparkles className="h-3 w-3 mr-1" />
-            RAG Enabled
-          </Badge>
-        </div>
-        {selectedVideoId && (
-          <p className="text-xs text-muted-foreground mt-1">Context: Current video and project sources</p>
-        )}
-      </div>
+    <div className="h-full flex flex-col relative">
+      <ChatHeader
+        threadId={threadId}
+        selectedVideoId={selectedVideoId}
+        settings={settings}
+        isSettingsOpen={isSettingsOpen}
+        setIsSettingsOpen={setIsSettingsOpen}
+        setSettings={setSettings}
+        onNewChat={createNewThread}
+      />
 
-      {/* Messages Area */}
-      <ScrollArea className="flex-1 p-4" ref={scrollAreaRef}>
-        <div className="space-y-4">
-          {messages.map((message) => (
-            <div key={message.id} className={`flex gap-3 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
-              {message.role === "assistant" && (
-                <Avatar className="h-8 w-8 flex-shrink-0">
-                  <AvatarFallback className="bg-primary text-primary-foreground">
-                    <Bot className="h-4 w-4" />
-                  </AvatarFallback>
-                </Avatar>
-              )}
+      <MessageList
+        messages={messages}
+        isLoading={isLoading}
+        error={null}
+        onCopy={copyToClipboard}
+        copiedMessageId={copiedMessageId}
+        messagesEndRef={messagesEndRef}
+      />
 
-              <div className={`max-w-[80%] ${message.role === "user" ? "order-first" : ""}`}>
-                <div
-                  className={`rounded-lg p-3 ${
-                    message.role === "user" ? "bg-primary text-primary-foreground ml-auto" : "bg-muted"
-                  }`}
-                >
-                  <p className="text-sm leading-relaxed">{message.content}</p>
+      <FileUploadPreview
+        uploadedFiles={uploadedFiles}
+        onRemoveFile={removeFile}
+      />
 
-                  {/* Sources */}
-                  {message.sources && message.sources.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-border/20">
-                      <p className="text-xs text-muted-foreground mb-1">Sources:</p>
-                      <div className="flex flex-wrap gap-1">
-                        {message.sources.map((source, index) => (
-                          <Badge key={index} variant="outline" className="text-xs">
-                            {source}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Message Actions */}
-                {message.role === "assistant" && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="text-xs text-muted-foreground">
-                      {message.timestamp.toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                    {!message.memoryStored ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-xs"
-                        onClick={() => storeInMemory(message.id)}
-                      >
-                        <Brain className="h-3 w-3 mr-1" />
-                        Store in Memory
-                      </Button>
-                    ) : (
-                      <Badge variant="secondary" className="text-xs">
-                        <Brain className="h-3 w-3 mr-1" />
-                        Stored
-                      </Badge>
-                    )}
-                  </div>
-                )}
-
-                {message.role === "user" && (
-                  <p className="text-xs text-muted-foreground mt-1 text-right">
-                    {message.timestamp.toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
-                  </p>
-                )}
-              </div>
-
-              {message.role === "user" && (
-                <Avatar className="h-8 w-8 flex-shrink-0">
-                  <AvatarFallback className="bg-secondary">
-                    <User className="h-4 w-4" />
-                  </AvatarFallback>
-                </Avatar>
-              )}
-            </div>
-          ))}
-
-          {/* Loading indicator */}
-          {isLoading && (
-            <div className="flex gap-3 justify-start">
-              <Avatar className="h-8 w-8 flex-shrink-0">
-                <AvatarFallback className="bg-primary text-primary-foreground">
-                  <Bot className="h-4 w-4" />
-                </AvatarFallback>
-              </Avatar>
-              <div className="bg-muted rounded-lg p-3">
-                <div className="flex items-center gap-2">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span className="text-sm text-muted-foreground">Thinking...</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </ScrollArea>
-
-      {/* Input Area */}
-      <div className="p-4 border-t border-border">
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder="Ask about your videos..."
-            disabled={isLoading}
-            className="flex-1"
-          />
-          <Button onClick={handleSendMessage} disabled={!inputValue.trim() || isLoading} size="sm">
-            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="flex flex-wrap gap-1 mt-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => setInputValue("Summarize the key points from this video")}
-            disabled={isLoading}
-          >
-            Summarize video
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => setInputValue("What are the main topics covered in my project?")}
-            disabled={isLoading}
-          >
-            Project overview
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-xs"
-            onClick={() => setInputValue("Find related videos on this topic")}
-            disabled={isLoading}
-          >
-            Find related
-          </Button>
-        </div>
-      </div>
-    </Card>
+      <ChatInput
+        input={input}
+        onInputChange={handleInputChange}
+        onSubmit={handleCustomSubmit}
+        onKeyDown={handleKeyDown}
+        onFileUpload={handleFileUpload}
+        isLoading={isLoading}
+        uploadedFiles={uploadedFiles}
+        fileInputRef={fileInputRef}
+      />
+    </div>
   )
 }
