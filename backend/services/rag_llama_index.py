@@ -13,10 +13,13 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.embeddings.fastembed import FastEmbedEmbedding
 from llama_index.llms.ollama import Ollama
+from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.core import Document
 from llama_index.core import VectorStoreIndex
 from llama_index.core import Settings
 from llama_index.core.postprocessor import SentenceTransformerRerank
+from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+from backend.trace.arize import tracer_provider
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,7 @@ class RAGServiceLlamaIndex:
         self.reranker = None
         self._initialize_embedding_providers()
         Settings.llm = Ollama(model="gemma3:270m", request_timeout=120)
+        LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
         
         
     def _initialize_embedding_providers(self):
@@ -272,6 +276,7 @@ class RAGServiceLlamaIndex:
 
             # Create query engine with reranking
             query_engine = loaded_index.as_query_engine(
+                llm=GoogleGenAI(model="gemini-2.0-flash"),
                 similarity_top_k=limit,
                 #node_postprocessors=[self.reranker] if self.reranker else []
             )

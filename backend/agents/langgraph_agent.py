@@ -11,7 +11,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain.chat_models import init_chat_model
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from backend.tools.retriever_tool import retriever_tool
+from backend.tools.retriever_tool import async_retriever_tool
 from backend.states.agent_state import AgentState
 from backend.prompts.agent_prompts import get_query_prompt, get_chatbot_prompt
 from backend import crud
@@ -141,12 +141,11 @@ class LangGraphAgent:
             # System prompt for query generation
             db = SessionLocal()
             videos = crud.get_videos_by_ids(db, state.get("video_ids"))
-            videos_summary = [v.summary for v in videos if v.summary]
-            query_prompt = get_query_prompt(user_message, videos_summary)
+            query_prompt = get_query_prompt(user_message, videos)
 
             # Generate queries
             response = await model.ainvoke([
-                SystemMessage(content="You are a helpful assistant that generates multiple search queries based on a single input query and context."),
+                # SystemMessage(content="You are a helpful assistant that generates multiple search queries based on a single input query and context."),
                 HumanMessage(content=query_prompt)
             ])
 
@@ -156,6 +155,7 @@ class LangGraphAgent:
             if hasattr(response, 'content'):
                 query_text = response.content.strip()
                 additional_queries = [q.strip() for q in query_text.split('\n') if q.strip()]
+                additional_queries.pop(0)
                 queries.extend(additional_queries)
 
             # Limit to 3 queries max
@@ -193,32 +193,21 @@ class LangGraphAgent:
                     "final_response": "Project ID not provided"
                 }
 
-            # Retrieve context for each query
+            # Retrieve context for each query using the async retriever
             all_results = []
             for query in state["generated_queries"]:
                 try:
-                    results = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: retriever_tool.invoke({
-                            "query": query,
-                            "project_id": project_id,
-                            "video_ids": state.get("video_ids")
-                        })
+                    results = await async_retriever_tool(
+                        query=query,
+                        project_id=project_id,
+                        video_ids=state.get("video_ids")
                     )
-                    all_results.extend(results)
+                    all_results.extend(results)  # Extend instead of append to flatten the results
                 except Exception as e:
                     logger.warning(f"Failed to retrieve for query '{query}': {e}")
 
-            # Deduplicate results by text content
-            unique_results = []
-            seen_texts = set()
-            for result in all_results:
-                if result.get("text") and result["text"] not in seen_texts:
-                    unique_results.append(result)
-                    seen_texts.add(result["text"])
-
-            logger.info(f"Retrieved {len(unique_results)} unique results")
-            return {"retrieval_results": unique_results}
+            logger.info(f"Retrieved {len(all_results)} unique results")
+            return {"retrieval_results": all_results}
 
         except Exception as e:
             logger.error(f"Error in context retrieval: {e}")
@@ -239,26 +228,24 @@ class LangGraphAgent:
             model = await self._get_model(chat_model, temperature=0.3)
 
             # Prepare context from retrieval results
-            context_text = "\n\n".join([
-                # f"Source: {result.get('source_url', 'Unknown')}\n"
-                # f"Content: {result.get('text', '')}\n"
-                # f"Relevance score: {result.get('score', 0):.3f}"
-                f"{result.get("text")} "
-                for result in state["retrieval_results"]
-            ])
+            context_parts = []
+            for result in state["retrieval_results"]:
+                if isinstance(result, dict) and result.get('text'):
+                    context_parts.append(
+                        f"Source: {result.get('source_url', 'Unknown')}\n"
+                        f"Content: {result.get('text', '')}\n"
+                        f"Relevance score: {result.get('score', 0):.3f}"
+                    )
+
+            context_text = "\n\n".join(context_parts) if context_parts else "No relevant context found."
 
             user_message = state["messages"][-1].content if state["messages"] else ""
             chat_prompt = get_chatbot_prompt(user_message, context_text)
 
-            # Debug logging
-            with open("docs/debug_user_prompt.txt", "a") as f:
-                f.write(f"---------- Query at {datetime.now().isoformat()} ----------\n")
-                f.write(chat_prompt)
-                f.write("\n" + "-" * 60 + "\n")
 
             # Generate response
             response = await model.ainvoke([
-                SystemMessage(content="You are a helpful AI assistant. Answer questions based on the provided context. Be concise and accurate."),
+                # SystemMessage(content="You are a helpful AI assistant. Answer questions based on the provided context. Be concise and accurate."),
                 HumanMessage(content=chat_prompt)
             ])
 
@@ -269,7 +256,7 @@ class LangGraphAgent:
                 "final_response": final_response
             }
 
-        except Exception as e:
+        except Exception as e:  
             logger.error(f"Error in response generation: {e}")
             return {
                 "final_response": f"Error generating response: {str(e)}"

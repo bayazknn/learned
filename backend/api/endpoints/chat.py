@@ -66,6 +66,7 @@ async def generate_streaming_response(
 ) -> AsyncGenerator[str, None]:
     """Generate streaming response from LangGraph agent"""
     db = None
+    generator = None
     try:
         # Validate thread_id
         try:
@@ -78,15 +79,17 @@ async def generate_streaming_response(
         db = SessionLocal()
         await save_message(db, thread_uuid, "user", query)
 
-        # Process with streaming
-        async for chunk in process_with_langgraph_streaming(
+        # # Process with streaming
+        generator = process_with_langgraph_streaming(
             query=query,
             project_id=project_id,
             thread_id=thread_id,
             video_ids=video_ids,
-            chat_llm_model="ollama", # TODO pass with request value
-            query_generate_llm_model="ollama" # TODO pass with request value
-        ):
+            chat_llm_model="gemini", # TODO pass with request value
+            query_generate_llm_model="gemini" # TODO pass with request value
+        )
+
+        async for chunk in generator:
             if isinstance(chunk, dict):
                 # Handle different chunk types
                 if chunk.get("type") == "text":
@@ -94,18 +97,26 @@ async def generate_streaming_response(
                 elif chunk.get("type") == "sources":
                     yield f"data: {json.dumps(chunk)}\n\n"
                 elif chunk.get("type") == "done":
-                    # Save assistant message with full content
-                    if chunk.get("content"):
-                        await save_message(db, thread_uuid, "assistant", chunk["content"])
                     yield f"data: {json.dumps(chunk)}\n\n"
-                    break
+                    # break
             else:
                 # Raw text chunk
                 yield f"data: {json.dumps({'type': 'text', 'content': str(chunk)})}\n\n"
+        
+        await save_message(db, thread_uuid, "assistant", chunk["content"])
+        
 
     except Exception as e:
+        logger.error(f"Error in streaming response: {e}")
         yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
     finally:
+        # Properly close the async generator if it exists
+        if generator:
+            try:
+                await generator.aclose()
+            except Exception as close_error:
+                logger.warning(f"Error closing async generator: {close_error}")
+
         # Ensure database session is properly closed
         if db:
             try:
@@ -146,7 +157,10 @@ async def chat_stream(
         thread = await create_or_get_thread(db, request.thread_id, project_id_uuid)
 
         # Convert video IDs to strings
-        video_ids_str = [str(vid) for vid in request.video_ids] if request.video_ids else None
+        if request.video_ids:
+            video_ids_str = [str(vid) for vid in request.video_ids]
+        else:
+            video_ids_str = [str(v.id) for v in crud.get_videos_by_project(db, project_id_uuid)]
 
         return StreamingResponse(
             generate_streaming_response(

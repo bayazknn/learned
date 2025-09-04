@@ -11,5 +11,7 @@ class Settings:
     YOUTUBE_API_KEY: str = os.getenv("YOUTUBE_API_KEY", "AIzaSyDhUZRsuoWbzphR_3nsmlV_cTURElgDvn8")
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "AIzaSyAP7riVdcmE3oLWwi0USE7y_2gtzRhaw2w")
     TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "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")
+    PHOENIX_COLLECTOR_ENDPOINT: str = os.getenv("PHOENIX_COLLECTOR_ENDPOINT", "http://localhost:6006")
+    PHOENIX_API_KEY: str = os.getenv("PHOENIX_API_KEY", "api_key")
 
 settings = Settings()

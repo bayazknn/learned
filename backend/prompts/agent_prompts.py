@@ -80,7 +80,7 @@ You are an expert AI assistant tasked with converting raw YouTube video transcri
 """
 
 
-def get_query_prompt(user_query: str, summaries: list[str]) -> str:
+def get_query_prompt(user_query: str, videos: list[str]) -> str:
     """
     Generates the prompt for the Query Agent.
 
@@ -91,15 +91,15 @@ def get_query_prompt(user_query: str, summaries: list[str]) -> str:
     Returns:
         The formatted prompt for the Query Agent.
     """
-    formatted_summaries = "\n".join([f"• {s}" for s in summaries])
+    formatted_summaries = "\n\n".join([f"Title:{s.title}\n{s.summary}" for s in videos])
     return f"""
-    Generate 6 search queries, one on each line, related to the following input query and context:"
+    Generate 2 search queries, one on each line, related to the following input query and context which reports of youtube video transcripts:"
                       
     ## Query: 
     {user_query}
 
     ## Context:
-    {summaries}
+    {formatted_summaries}
     """
 
 

@@ -58,6 +58,12 @@ fake-useragent==1.5.1
 urllib3==2.2.3
 python-multipart==0.0.20
 arize-phoenix==11.30.0
-langgraph-checkpoint-postgres==2.0.23 
+langgraph-checkpoint-postgres==2.0.23
 asyncpg==0.30.0
 llama-index-llms-ollama==0.7.1
+openinference-instrumentation-llama-index==4.3.4
+openinference-instrumentation-langchain==0.1.51
+llama-index-llms-google-genai==0.3.0
+opentelemetry-instrumentation-fastapi==0.50b0
+opentelemetry-instrumentation-httpx==0.50b0
+opentelemetry-instrumentation-sqlalchemy==0.50b0
