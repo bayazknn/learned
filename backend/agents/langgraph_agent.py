@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional, TypedDict, Annotated, AsyncGenerat
 import uuid
 import logging
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph, START, END
@@ -114,7 +114,7 @@ class LangGraphAgent:
             )
         elif model_type == "gemini":
             return init_chat_model(
-                model="gemini-2.0-flash-exp",
+                model="gemini-2.5-flash",
                 model_provider="google-genai",
                 temperature=temperature
             )
@@ -166,9 +166,10 @@ class LangGraphAgent:
 
         except Exception as e:
             logger.error(f"Error in query generation: {e}")
+            # Return a valid state that allows the graph to continue
             return {
-                "generated_queries": [],
-                "final_response": f"Error generating search queries: {str(e)}"
+                "generated_queries": [user_message],  # Fallback to original query
+                "final_response": f"I encountered an issue while processing your request. Let me try to help with a direct response."
             }
         finally:
             if db:
@@ -219,9 +220,14 @@ class LangGraphAgent:
     async def _generate_response_node(self, state: LangGraphState) -> LangGraphState:
         """Step 3: Generate final response using retrieved context"""
         try:
+            user_message = state["messages"][-1].content if state["messages"] else ""
+
             if not state.get("retrieval_results"):
+                # No context found - provide a helpful fallback response
+                fallback_response = f"I don't have specific information about '{user_message}' in my knowledge base. Could you try rephrasing your question or providing more details?"
                 return {
-                    "final_response": "No relevant context found to answer your question."
+                    "messages": [AIMessage(content=fallback_response)],
+                    "final_response": fallback_response
                 }
 
             chat_model = state.get("chat_llm_model", "ollama")
@@ -239,9 +245,7 @@ class LangGraphAgent:
 
             context_text = "\n\n".join(context_parts) if context_parts else "No relevant context found."
 
-            user_message = state["messages"][-1].content if state["messages"] else ""
             chat_prompt = get_chatbot_prompt(user_message, context_text)
-
 
             # Generate response
             response = await model.ainvoke([
@@ -250,16 +254,19 @@ class LangGraphAgent:
             ])
 
             final_response = response.content if hasattr(response, 'content') else "No response generated"
-            
+
             return {
-                "messages": [AIMessage(content=final_response)], 
+                "messages": [AIMessage(content=final_response)],
                 "final_response": final_response
             }
 
-        except Exception as e:  
+        except Exception as e:
             logger.error(f"Error in response generation: {e}")
+            # Provide a helpful fallback response that still allows the graph to complete
+            fallback_response = f"I encountered a technical issue while processing your request about '{user_message}'. This might be due to API rate limits or temporary service issues. Please try again in a moment, or consider using a different model."
             return {
-                "final_response": f"Error generating response: {str(e)}"
+                "messages": [AIMessage(content=fallback_response)],
+                "final_response": fallback_response
             }
 
     async def process_query(
@@ -278,8 +285,21 @@ class LangGraphAgent:
             if not thread_id:
                 thread_id = str(uuid.uuid4())
 
+            config = {"configurable": {"thread_id": thread_id}}
+
+            # Load existing messages from checkpointer
+            existing_messages = []
+            try:
+                async for state in self.checkpointer.alist(config, limit=1):
+                    channel_values = state.checkpoint.get("channel_values", {})
+                    existing_messages = channel_values.get("messages", [])
+                    break
+            except Exception as e:
+                logger.debug(f"No existing state found for thread {thread_id}: {e}")
+
+            # Create initial state with accumulated messages
             initial_state: LangGraphState = {
-                "messages": [HumanMessage(content=query)],
+                "messages": existing_messages + [HumanMessage(content=query)],
                 "project_id": project_id,
                 "video_ids": video_ids,
                 "generated_queries": None,
@@ -290,7 +310,6 @@ class LangGraphAgent:
                 "chat_llm_model": chat_llm_model
             }
 
-            config = {"configurable": {"thread_id": thread_id}}
             final_state = await self.graph.ainvoke(initial_state, config)
 
             return {
@@ -321,14 +340,30 @@ class LangGraphAgent:
         chat_llm_model: Optional[str] = "gemini"
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Process a query using streaming with the same persistent checkpointer"""
+        stream_started = False
+        final_response = ""
+
         try:
             await self._ensure_initialized()
 
             if not thread_id:
                 thread_id = str(uuid.uuid4())
 
+            config = {"configurable": {"thread_id": thread_id}}
+
+            # Load existing messages from checkpointer
+            existing_messages = []
+            try:
+                async for state in self.checkpointer.alist(config, limit=1):
+                    channel_values = state.checkpoint.get("channel_values", {})
+                    existing_messages = channel_values.get("messages", [])
+                    break
+            except Exception as e:
+                logger.debug(f"No existing state found for thread {thread_id}: {e}")
+
+            # Create initial state with accumulated messages
             initial_state: LangGraphState = {
-                "messages": [HumanMessage(content=query)],
+                "messages": existing_messages + [HumanMessage(content=query)],
                 "project_id": project_id,
                 "video_ids": video_ids,
                 "generated_queries": None,
@@ -339,75 +374,180 @@ class LangGraphAgent:
                 "chat_llm_model": chat_llm_model
             }
 
-            config = {"configurable": {"thread_id": thread_id}}
-
             # Use the same graph with persistent checkpointer
-            async for event in self.graph.astream(initial_state, config):
-                for node_name, state in event.items():
-                    if node_name == "generate_queries" and state.get("generated_queries"):
-                        yield {
-                            "type": "queries_generated",
-                            "queries": state["generated_queries"]
-                        }
+            try:
+                async for event in self.graph.astream(initial_state, config):
+                    stream_started = True
 
-                    elif node_name == "retrieve_context" and state.get("retrieval_results"):
-                        yield {
-                            "type": "sources",
-                            "sources": [
-                                {
-                                    "url": result.get("source_url", ""),
-                                    "content": result.get("text", "")[:200] + "...",
-                                    "score": float(result.get("score", 0))
+                    for node_name, state in event.items():
+                        try:
+                            if node_name == "generate_queries" and state.get("generated_queries"):
+                                yield {
+                                    "type": "queries_generated",
+                                    "queries": state["generated_queries"]
                                 }
-                                for result in state["retrieval_results"][:5]
-                            ]
-                        }
 
-                    elif node_name == "generate_response" and state.get("final_response"):
-                        response_text = state["final_response"]
-                        
-                        # Stream the response word by word
-                        words = response_text.split()
-                        for i, word in enumerate(words):
-                            yield {
-                                "type": "text",
-                                "content": word + " ",
-                                "is_complete": i == len(words) - 1
-                            }
-                            await asyncio.sleep(0.05)
+                            elif node_name == "retrieve_context" and state.get("retrieval_results"):
+                                yield {
+                                    "type": "sources",
+                                    "sources": [
+                                        {
+                                            "url": result.get("source_url", ""),
+                                            "content": result.get("text", "")[:200] + "...",
+                                            "score": float(result.get("score", 0))
+                                        }
+                                        for result in state["retrieval_results"][:5]
+                                    ]
+                                }
 
-                        yield {
-                            "type": "done",
-                            "content": response_text,
-                            "thread_id": thread_id
-                        }
+                            elif node_name == "generate_response" and state.get("final_response"):
+                                response_text = state["final_response"]
+                                final_response = response_text
+
+                                # Stream the response word by word with proper error handling
+                                words = response_text.split()
+                                for i, word in enumerate(words):
+                                    try:
+                                        yield {
+                                            "type": "text",
+                                            "content": word + " ",
+                                            "is_complete": i == len(words) - 1
+                                        }
+                                    except GeneratorExit:
+                                        # Client disconnected - this is normal, don't log as error
+                                        logger.debug("Client disconnected during word streaming")
+                                        return
+                                    except Exception as word_error:
+                                        logger.warning(f"Error streaming word: {word_error}")
+                                        continue
+
+                                # Send completion signal
+                                try:
+                                    yield {
+                                        "type": "done",
+                                        "content": response_text,
+                                        "thread_id": thread_id
+                                    }
+                                except GeneratorExit:
+                                    # Client disconnected - this is normal
+                                    logger.debug("Client disconnected during completion signal")
+                                    return
+                                return
+
+                        except GeneratorExit:
+                            # Client disconnected - this is normal, don't log as error
+                            logger.debug("Client disconnected during event processing")
+                            #return
+                            continue
+                        except Exception as event_error:
+                            logger.error(f"Error processing event from {node_name}: {event_error}")
+                            continue    
+            except GeneratorExit:
+                # Client disconnected - this is normal, don't log as error
+                logger.debug("Client disconnected during graph execution")
+                return
+            except Exception as stream_error:
+                logger.error(f"Error in graph streaming: {stream_error}")
+                if stream_started:
+                    try:
+                        yield {"type": "error", "content": f"Stream error: {str(stream_error)}"}
+                    except GeneratorExit:
+                        # Client disconnected during error handling
+                        logger.debug("Client disconnected during error handling")
                         return
+                else:
+                    raise
+            with suppress(GeneratorExit):
+                        await asyncio.sleep(0)
 
+        except GeneratorExit:
+            # Client disconnected - this is normal, don't log as error
+            logger.debug("Client disconnected during initialization")
+            return
         except Exception as e:
             logger.error(f"Error in streaming processing: {e}")
-            yield {"type": "error", "content": str(e)}
+            try:
+                yield {"type": "error", "content": str(e)}
+            except GeneratorExit:
+                # Client disconnected during error handling
+                logger.debug("Client disconnected during error handling")
+                return
+        finally:
+            # Ensure any cleanup is done
+            if stream_started:
+                logger.debug(f"Stream completed for thread {thread_id}")
+
+                # CRITICAL FIX: After streaming completes, explicitly save the final state
+                # The streaming method doesn't automatically persist the final state like ainvoke() does
+                try:
+                    # Get the current state after streaming to ensure all state properties are saved
+                    current_state = await self.graph.aget_state(config)
+
+                    if current_state and current_state.values:
+                        state_values = current_state.values
+
+                        # Log the state for debugging
+                        logger.info(f"Final state after streaming for thread {thread_id}:")
+                        logger.info(f"  - generated_queries: {'✓' if state_values.get('generated_queries') else '✗'} ({len(state_values.get('generated_queries', []))} queries)")
+                        logger.info(f"  - retrieval_results: {'✓' if state_values.get('retrieval_results') else '✗'} ({len(state_values.get('retrieval_results', []))} results)")
+                        logger.info(f"  - final_response: {'✓' if state_values.get('final_response') else '✗'} ({len(state_values.get('final_response', '')[:50])}...)")
+
+                        # Explicitly update the state to ensure persistence
+                        await self.graph.aupdate_state(config, state_values)
+                        logger.info(f"Successfully persisted final state for thread {thread_id}")
+                    else:
+                        logger.warning(f"No state found to persist for thread {thread_id}")
+
+                except Exception as persistence_error:
+                    logger.error(f"Error persisting final state: {persistence_error}")
+                    # Try alternative approach - get state from checkpointer
+                    try:
+                        async for checkpoint_tuple in self.checkpointer.alist(config, limit=1):
+                            latest_checkpoint = checkpoint_tuple.checkpoint
+                            channel_values = latest_checkpoint.get("channel_values", {})
+
+                            logger.info(f"Fallback: State from checkpointer for thread {thread_id}:")
+                            logger.info(f"  - generated_queries: {'✓' if channel_values.get('generated_queries') else '✗'}")
+                            logger.info(f"  - retrieval_results: {'✓' if channel_values.get('retrieval_results') else '✗'}")
+                            logger.info(f"  - final_response: {'✓' if channel_values.get('final_response') else '✗'}")
+                            break
+                    except Exception as fallback_error:
+                        logger.error(f"Error in fallback state check: {fallback_error}")
 
     async def get_chat_history(self, thread_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get chat history for a specific thread"""
         try:
             await self._ensure_initialized()
-            
+
             config = {"configurable": {"thread_id": thread_id}}
-            
-            # Get state history
-            history = []
-            async for state in self.checkpointer.alist(config, limit=limit):
-                if state.values and state.values.get("messages"):
-                    for msg in state.values["messages"]:
-                        if isinstance(msg, (HumanMessage, AIMessage)):
-                            history.append({
-                                "type": "human" if isinstance(msg, HumanMessage) else "ai",
-                                "content": msg.content,
-                                "timestamp": state.created_at.isoformat() if state.created_at else None
-                            })
-            
-            return list(reversed(history))  # Return chronological order
-            
+
+            # Get the latest state for this thread
+            latest_state = None
+            async for checkpoint_tuple in self.checkpointer.alist(config, limit=1):
+                latest_state = checkpoint_tuple
+                break
+
+            if not latest_state:
+                return []
+
+            # Extract messages from the latest checkpoint
+            # CheckpointTuple has attributes: checkpoint, metadata, config, parent_config
+            checkpoint_data = latest_state.checkpoint
+            channel_values = checkpoint_data.get("channel_values", {})
+            messages = channel_values.get("messages", [])
+
+            # Format messages for response
+            formatted_messages = []
+            for msg in messages:
+                if isinstance(msg, (HumanMessage, AIMessage)):
+                    formatted_messages.append({
+                        "type": "human" if isinstance(msg, HumanMessage) else "ai",
+                        "content": msg.content,
+                        "timestamp": None  # LangGraph doesn't store timestamps in the same way
+                    })
+
+            return formatted_messages
+
         except Exception as e:
             logger.error(f"Error getting chat history: {e}")
             return []
@@ -440,8 +580,21 @@ async def process_with_langgraph(query: str, project_id: str, **kwargs) -> Dict[
 
 async def process_with_langgraph_streaming(query: str, project_id: str, **kwargs) -> AsyncGenerator[Dict[str, Any], None]:
     """Convenience function to process query with LangGraph streaming"""
-    async for chunk in langgraph_agent.process_query_streaming(query, project_id, **kwargs):
-        yield chunk
+    try:
+        async for chunk in langgraph_agent.process_query_streaming(query, project_id, **kwargs):
+            yield chunk
+    except GeneratorExit:
+        # Client disconnected - this is normal, don't log as error
+        logger.debug("Streaming generator closed by client")
+        return
+    except Exception as e:
+        logger.error(f"Error in streaming wrapper: {e}")
+        try:
+            yield {"type": "error", "content": str(e)}
+        except GeneratorExit:
+            # Client disconnected during error handling
+            logger.debug("Client disconnected during error handling")
+            return
 
 
 async def get_chat_history(thread_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:

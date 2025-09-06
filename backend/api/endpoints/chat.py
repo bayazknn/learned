@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from contextlib import suppress
 
 from backend.agents.langgraph_agent import process_with_langgraph_streaming, process_with_langgraph, get_chat_history
 from backend.database import get_db, SessionLocal
@@ -66,57 +67,92 @@ async def generate_streaming_response(
 ) -> AsyncGenerator[str, None]:
     """Generate streaming response from LangGraph agent"""
     db = None
-    generator = None
+    assistant_response = ""
+
     try:
         # Validate thread_id
         try:
             thread_uuid = UUID(thread_id)
         except ValueError:
-            yield f"data: {json.dumps({'type': 'error', 'content': 'Invalid thread ID format'})}\n\n"
+            try:
+                yield f"data: {json.dumps({'type': 'error', 'content': 'Invalid thread ID format'})}\n\n"
+            except GeneratorExit:
+                # Client disconnected during error handling
+                logger.debug("Client disconnected during thread ID validation error")
+                return
             return
 
         # Save user message first
         db = SessionLocal()
-        await save_message(db, thread_uuid, "user", query)
+        try:
+            await save_message(db, thread_uuid, "user", query)
+        except Exception as e:
+            logger.error(f"Failed to save user message: {e}")
+            # Continue with processing even if save fails
 
-        # # Process with streaming
-        generator = process_with_langgraph_streaming(
-            query=query,
-            project_id=project_id,
-            thread_id=thread_id,
-            video_ids=video_ids,
-            chat_llm_model="gemini", # TODO pass with request value
-            query_generate_llm_model="gemini" # TODO pass with request value
-        )
+        # Process with streaming - use async context manager
+        try:
+            async for chunk in process_with_langgraph_streaming(
+                query=query,
+                project_id=project_id,
+                thread_id=thread_id,
+                video_ids=video_ids,
+                chat_llm_model="gemini",  # TODO pass with request value
+                query_generate_llm_model="gemini"  # TODO pass with request value
+            ):
+                try:
+                    if isinstance(chunk, dict):
+                        # Handle different chunk types
+                        if chunk.get("type") == "text":
+                            assistant_response += chunk.get("content", "")
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                        elif chunk.get("type") == "sources":
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                        elif chunk.get("type") == "done":
+                            assistant_response = chunk.get("content", assistant_response)
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                            break
+                        else:
+                            # Handle other chunk types
+                            yield f"data: {json.dumps(chunk)}\n\n"
+                    else:
+                        # Raw text chunk
+                        assistant_response += str(chunk)
+                        yield f"data: {json.dumps({'type': 'text', 'content': str(chunk)})}\n\n"
+                except GeneratorExit:
+                    # Client disconnected during chunk processing - this is normal
+                    logger.debug("Client disconnected during chunk processing")
+                    return
+                except Exception as chunk_error:
+                    logger.error(f"Error processing chunk: {chunk_error}")
+                    continue
+            with suppress(GeneratorExit):
+                        await asyncio.sleep(0)
+        except GeneratorExit:
+            # Client disconnected during streaming - this is normal
+            logger.debug("Client disconnected during streaming")
+            return
 
-        async for chunk in generator:
-            if isinstance(chunk, dict):
-                # Handle different chunk types
-                if chunk.get("type") == "text":
-                    yield f"data: {json.dumps(chunk)}\n\n"
-                elif chunk.get("type") == "sources":
-                    yield f"data: {json.dumps(chunk)}\n\n"
-                elif chunk.get("type") == "done":
-                    yield f"data: {json.dumps(chunk)}\n\n"
-                    # break
-            else:
-                # Raw text chunk
-                yield f"data: {json.dumps({'type': 'text', 'content': str(chunk)})}\n\n"
-        
-        await save_message(db, thread_uuid, "assistant", chunk["content"])
-        
+        # Save assistant response after streaming is complete
+        if assistant_response.strip():
+            try:
+                await save_message(db, thread_uuid, "assistant", assistant_response)
+            except Exception as e:
+                logger.error(f"Failed to save assistant message: {e}")
 
+    except GeneratorExit:
+        # Client disconnected during initialization - this is normal
+        logger.debug("Client disconnected during streaming response initialization")
+        return
     except Exception as e:
         logger.error(f"Error in streaming response: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+        try:
+            yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
+        except GeneratorExit:
+            # Client disconnected during error handling
+            logger.debug("Client disconnected during error handling")
+            return
     finally:
-        # Properly close the async generator if it exists
-        if generator:
-            try:
-                await generator.aclose()
-            except Exception as close_error:
-                logger.warning(f"Error closing async generator: {close_error}")
-
         # Ensure database session is properly closed
         if db:
             try:
@@ -174,10 +210,12 @@ async def chat_stream(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "Access-Control-Allow-Origin": "*",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
             }
         )
 
     except Exception as e:
+        logger.exception(f"Error processing chat request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing chat request: {str(e)}")
 
 @router.post("/", response_model=ChatResponse)
@@ -220,7 +258,6 @@ async def chat(
             video_ids=[str(vid) for vid in request.video_ids] if request.video_ids else None
         )
 
-
         await save_message(db, thread.id, "assistant", str(result["response"]))
 
         return ChatResponse(
@@ -236,6 +273,7 @@ async def chat(
         )
 
     except Exception as e:
+        logger.exception(f"Error processing chat request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing chat request: {str(e)}")
 
 @router.get("/threads/{thread_id}", response_model=ChatThreadWithMessages)
@@ -259,6 +297,7 @@ async def get_thread(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"Error retrieving thread: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving thread: {str(e)}")
 
 @router.get("/threads", response_model=List[ChatThreadResponse])
@@ -282,8 +321,8 @@ async def list_threads(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"Error listing threads: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error listing threads: {str(e)}")
-
 
 @router.delete("/threads/{thread_id}")
 async def delete_thread(
@@ -313,8 +352,8 @@ async def delete_thread(
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception(f"Error deleting thread: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error deleting thread: {str(e)}")
-
 
 @router.get("/checkpoint/{thread_id}", response_model=ChatHistoryResponse)
 async def get_chat_history_endpoint(thread_id: str, limit: Optional[int] = 50):
@@ -329,5 +368,5 @@ async def get_chat_history_endpoint(thread_id: str, limit: Optional[int] = 50):
         )
         
     except Exception as e:
-        logger.error(f"Error getting chat history: {e}")
+        logger.exception(f"Error getting chat history: {e}")
         raise HTTPException(status_code=500, detail=str(e))

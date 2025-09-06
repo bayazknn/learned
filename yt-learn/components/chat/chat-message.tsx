@@ -38,8 +38,9 @@ export function ChatMessage({ message, onCopy, copiedMessageId }: ChatMessagePro
 
   const content = getMessageContent()
 
-  // Don't render empty assistant messages (streaming placeholders)
-  if (!isUser && !isError && !content.trim()) {
+  // Don't render empty assistant messages unless they're actively streaming
+  // Allow rendering if message has sources or if it's a streaming message (has _updateCounter)
+  if (!isUser && !isError && !content.trim() && !message.sources?.length && !message._updateCounter) {
     return null
   }
 
@@ -69,6 +70,10 @@ export function ChatMessage({ message, onCopy, copiedMessageId }: ChatMessagePro
         >
           <div className="text-sm leading-relaxed whitespace-pre-wrap">
             {content}
+            {/* Show typing cursor for streaming messages */}
+            {message._updateCounter && !content.endsWith(' ') && (
+              <span className="inline-block w-2 h-4 bg-current animate-pulse ml-1"></span>
+            )}
           </div>
 
           {/* File attachments */}

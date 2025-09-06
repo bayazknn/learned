@@ -9,30 +9,31 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from backend.agents.langgraph_agent import initialize_global_agent, cleanup_global_agent
+from backend.trace.arize import tracer_provider
+from openinference.instrumentation.langchain import LangChainInstrumentor
 
 logger = logging.getLogger(__name__)
 
-# Lifespan manager for proper startup/shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handle startup and shutdown events"""
+    """Handle application lifecycle events"""
     # Startup
-    logger.info("Starting up LangGraph Agent...")
     try:
+        LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
         await initialize_global_agent()
-        logger.info("LangGraph Agent initialized successfully")
-        yield
+        print("✅ LangGraph agent initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize LangGraph Agent: {e}")
+        print(f"❌ Failed to initialize LangGraph agent: {e}")
         raise
-    finally:
-        # Shutdown
-        logger.info("Shutting down LangGraph Agent...")
-        try:
-            await cleanup_global_agent()
-            logger.info("LangGraph Agent cleaned up successfully")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+    
+    yield  # Application runs here
+    
+    # Shutdown
+    try:
+        await cleanup_global_agent()
+        print("✅ LangGraph agent cleaned up successfully")
+    except Exception as e:
+        print(f"❌ Error during cleanup: {e}")
 
 
 app = FastAPI(

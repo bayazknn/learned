@@ -2,6 +2,7 @@
 
 import type React from "react"
 import { useState, useRef, useEffect, useCallback } from "react"
+import { flushSync } from "react-dom"
 import { toast } from "sonner"
 import {
   ChatHeader,
@@ -202,20 +203,29 @@ export function AIChat({ projectId, selectedVideoId }: AIChatProps) {
         throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`)
       }
 
-      // Handle Server-Sent Events
+      // Handle Server-Sent Events with improved streaming and forced updates
       const reader = response.body?.getReader()
       const decoder = new TextDecoder()
       let accumulatedContent = ''
       let sources: any[] = []
+      let buffer = ''
+      let updateCounter = 0
 
       if (reader) {
         try {
           while (true) {
             const { done, value } = await reader.read()
-            if (done) break
+            if (done) {
+              new Promise(resolve => setTimeout(resolve, 1));
+              break
+            }
 
-            const chunk = decoder.decode(value)
-            const lines = chunk.split('\n')
+            // Decode the chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true })
+
+            // Process complete lines from buffer
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || '' // Keep incomplete line in buffer
 
             for (const line of lines) {
               if (line.startsWith('data: ')) {
@@ -224,19 +234,25 @@ export function AIChat({ projectId, selectedVideoId }: AIChatProps) {
 
                   if (data.type === 'text') {
                     accumulatedContent += data.content
-                    // Update the assistant message with streaming content
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessageId
-                        ? {
-                            ...msg,
-                            content: accumulatedContent,
-                            parts: [{ type: 'text', text: accumulatedContent }]
-                          }
-                        : msg
-                    ))
+
+                    // Force immediate synchronous re-render
+                    updateCounter++
+                    flushSync(() => {
+                      setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessageId
+                          ? {
+                              ...msg,
+                              content: accumulatedContent,
+                              parts: [{ type: 'text', text: accumulatedContent }],
+                              // Add a counter to force re-render even if content hasn't changed
+                              _updateCounter: updateCounter
+                            }
+                          : msg
+                      ))
+                    })
+
                   } else if (data.type === 'sources') {
                     sources = data.sources
-                    // Update sources
                     setMessages(prev => prev.map(msg =>
                       msg.id === assistantMessageId
                         ? { ...msg, sources }
@@ -257,7 +273,38 @@ export function AIChat({ projectId, selectedVideoId }: AIChatProps) {
               }
             }
           }
+
+          // Process any remaining data in buffer
+          if (buffer.trim()) {
+            const lines = buffer.split('\n')
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6))
+                  if (data.type === 'text') {
+                    accumulatedContent += data.content
+                    updateCounter++
+                    flushSync(() => {
+                      setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessageId
+                          ? {
+                              ...msg,
+                              content: accumulatedContent,
+                              parts: [{ type: 'text', text: accumulatedContent }],
+                              _updateCounter: updateCounter
+                            }
+                          : msg
+                      ))
+                    })
+                  }
+                } catch (parseError) {
+                  console.warn('Failed to parse remaining SSE data:', line, parseError)
+                }
+              }
+            }
+          }
         } finally {
+          
           reader.releaseLock()
         }
       }

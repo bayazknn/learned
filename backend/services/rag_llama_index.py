@@ -276,7 +276,7 @@ class RAGServiceLlamaIndex:
 
             # Create query engine with reranking
             query_engine = loaded_index.as_query_engine(
-                llm=GoogleGenAI(model="gemini-2.0-flash"),
+                llm=GoogleGenAI(model="gemini-2.5-flash"),
                 similarity_top_k=limit,
                 #node_postprocessors=[self.reranker] if self.reranker else []
             )
